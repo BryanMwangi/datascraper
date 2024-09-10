@@ -1,118 +1,71 @@
-import puppeteer from "puppeteer-extra";
-import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import fs from "fs";
-
-puppeteer.use(StealthPlugin());
+import { getImageFromUnsplash } from "./src/unsplash";
 
 const ITEMS_FILE_PATH = "./data/items.json";
-const IMAGES_FILE_PATH = "./data/images.json";
+const NEW_ITEMS_FILE_PATH = "./data/new_items.json";
+const QUERY_FILE_PATH = "./data/queries.json";
+const UNSPLASH_IMAGES_FILE_PATH = "./data/unsplash_images.json";
 
-//different user agents are used to avoid detection
-const userAgents = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.121 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.157 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.71 Safari/537.36",
-];
-
-const scrapeImages = async (query) => {
-  try {
-    console.log("running image search for ", query, "...");
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
-
-    const page = await browser.newPage();
-
-    // Set random user agent
-    const randomNumber = Math.floor(Math.random() * userAgents.length);
-    await page.setUserAgent(userAgents[randomNumber]);
-
-    await page.goto(`https://www.google.com/search?tbm=isch&q=${query}`, {
-      waitUntil: "networkidle2",
-    });
-
-    // Scroll to the bottom of the page to load more images
-    await page.evaluate(async () => {
-      for (let i = 0; i < 10; i++) {
-        window.scrollBy(0, window.innerHeight);
-        await new Promise((resolve) => setTimeout(resolve, 500)); // Wait for more images to load
-      }
-    });
-    // Wait for images to be loaded
-    await page.waitForSelector("img", { visible: true, timeout: 20000 });
-
-    // Extract full-size image URLs by accessing the parent anchor tag's href attribute
-    const images = await page.evaluate(() => {
-      const imageElements = document.querySelectorAll("img");
-      const urls = [];
-      imageElements.forEach((img) => {
-        const url = img.src || img.dataset.src;
-        if (url && url.startsWith("http") && !url.includes("google")) {
-          urls.push(url);
-        }
-      });
-      return urls.slice(0, 10);
-    });
-
-    await browser.close();
-    console.log("images", images);
-    return images;
-  } catch (error) {
-    console.error(error);
-    return [];
-  }
-};
-
-const getImage = async (name, type) => {
-  const query = `${name}+${type}`;
-  const images = await scrapeImages(query);
-
-  if (images.length === 0) {
-    console.log("running backup image search for ", type, "...");
-    const backUpImages = await scrapeImages(type);
-    if (backUpImages.length > 0) {
-      const randomIndex = Math.floor(Math.random() * backUpImages.length);
-      const randomImage = backUpImages[randomIndex];
-      console.log("random image from backup", randomImage);
-      return randomImage;
+const getUniqueQueries = async () => {
+  let items = fs.readFileSync(ITEMS_FILE_PATH);
+  items = JSON.parse(items);
+  const queries = [];
+  for (const item of items) {
+    const name = item.name;
+    const type = item.type;
+    const query = `${name} ${type}`;
+    if (!queries.includes(query)) {
+      queries.push(query);
     }
-
-    console.error("No images found");
-    return null;
   }
-
-  const randomIndex = Math.floor(Math.random() * images.length);
-  const randomImage = images[randomIndex];
-  console.log("random image", randomImage);
-  return randomImage;
+  fs.writeFileSync(QUERY_FILE_PATH, JSON.stringify(queries, null, 2));
 };
 
 const getImagesFromWeb = async () => {
   try {
-    let items = fs.readFileSync(ITEMS_FILE_PATH);
-    items = JSON.parse(items);
+    let queries = fs.readFileSync(QUERY_FILE_PATH);
+    queries = JSON.parse(queries);
     const images = [];
 
-    for (const item of items) {
-      const name = item.name.replace(/\s+/g, "+");
-      const type = item.type;
-
-      const image = await getImage(name, type);
+    for (const query of queries) {
+      console.log("running image search for ", query, "...");
+      const image = await getImageFromUnsplash(query);
       const data = {
-        id: item.id,
+        id: query,
         image: image,
       };
       images.push(data);
-      console.log("completed", item.name, item.type, item.id);
+      console.log("completed", query);
     }
-    fs.writeFileSync(IMAGES_FILE_PATH, JSON.stringify(images, null, 2));
+
+    fs.writeFileSync(
+      UNSPLASH_IMAGES_FILE_PATH,
+      JSON.stringify(images, null, 2)
+    );
+    return images;
   } catch (error) {
     console.error(error);
   }
 };
 
-getImagesFromWeb();
+const updatePostsWithImages = async () => {
+  let items = fs.readFileSync(ITEMS_FILE_PATH);
+  items = JSON.parse(items);
+  const images = await getImagesFromWeb();
+  const newItems = [];
+  for (const item of items) {
+    const name = item.name;
+    const type = item.type;
+
+    const query = `${name} ${type}`;
+    const image = images.find((image) => image.id === query);
+    if (image && !item.imageUrl) {
+      item.imageUrl = image.image;
+      newItems.push(item);
+    }
+  }
+  fs.writeFileSync(NEW_ITEMS_FILE_PATH, JSON.stringify(newItems, null, 2));
+};
+
+getUniqueQueries();
+updatePostsWithImages();
