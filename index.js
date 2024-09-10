@@ -1,5 +1,5 @@
 import fs from "fs";
-import { getImageFromUnsplash } from "./src/unsplash";
+import { getImageFromUnsplash } from "./src/unsplash.js";
 
 const ITEMS_FILE_PATH = "./data/items.json";
 const NEW_ITEMS_FILE_PATH = "./data/new_items.json";
